@@ -27,6 +27,10 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
         self.publication = publication
         self.initialLocation = initialLocation
             ?? publication.readingOrder.first.map { Locator(link: $0) }
+        
+        let durations = publication.readingOrder.map { $0.duration ?? 0 }
+        self.durations = durations
+        self.totalDuration = publication.metadata.duration ?? durations.reduce(0, +)
     }
     
     deinit {
@@ -39,22 +43,33 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
             resourceIndex: resourceIndex,
             state: state,
             time: currentTime,
-            duration: duration
+            duration: resourceDuration
         )
     }
-    
+
     // Index of the current resource in the reading order.
     private var resourceIndex: Int = 0
     
+    /// Starting time of the current resource, in the reading order.
+    private var resourceStartingTime: Double? {
+        durations[..<resourceIndex].reduce(0, +)
+    }
+
     /// Duration in seconds in the current resource.
-    private var duration: Double? {
+    private var resourceDuration: Double? {
         if let duration = player.currentItem?.duration, duration.isNumeric {
             return duration.secondsOrZero
         } else {
             return publication.readingOrder[resourceIndex].duration
         }
     }
+
+    /// Total duration in the publication.
+    private let totalDuration: Double
     
+    /// Durations indexed by reading order position.
+    private let durations: [Double]
+
     private var timeControlStatusObserver: NSKeyValueObservation?
     private var currentItemObserver: NSKeyValueObservation?
 
@@ -66,7 +81,6 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
         player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 1000), queue: .main) { [weak self] time in
             if let self = self {
                 let time = time.secondsOrZero
-                self.delegate?.navigator(self, locationDidChange: self.makeLocator(forTime: time))
                 self.playbackDidChange(time)
             }
         }
@@ -94,6 +108,11 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
     }()
     
     private func playbackDidChange(_ time: Double? = nil) {
+        if let time = time {
+            let locator = makeLocator(forTime: time)
+            currentLocation = locator
+            self.delegate?.navigator(self, locationDidChange: locator)
+        }
         delegate?.navigator(self, playbackDidChange: makePlaybackInfo(forTime: time))
         // FIXME: probably not working when paused
         delegate?.navigator(self, loadedTimeRangesDidChange: (player.currentItem?.loadedTimeRanges ?? [])
@@ -111,31 +130,39 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
             resourceIndex: resourceIndex,
             state: state,
             time: time ?? currentTime,
-            duration: duration
+            duration: resourceDuration
         )
     }
 
     private func makeLocator(forTime time: Double) -> Locator {
         let link = publication.readingOrder[resourceIndex]
+        
+        var progression: Double?
+        if let duration = resourceDuration, duration > 0 {
+            progression = resourceDuration.map { time / max($0, 1) }
+        }
+        
+        var totalProgression: Double?
+        if totalDuration > 0, let startingTime = resourceStartingTime {
+            totalProgression = (startingTime + time) / totalDuration
+        }
+        
         return Locator(
             href: link.href,
             type: link.type ?? "audio/*",
             title: link.title,
             locations: Locator.Locations(
                 fragments: ["t=\(time)"],
-                progression: duration.map { time / $0 },
-                // FIXME: totalProgression
-                totalProgression: nil
+                progression: progression,
+                totalProgression: totalProgression
             )
         )
     }
 
     // MARK: - Navigator
     
-    public var currentLocation: Locator? {
-        makeLocator(forTime: currentTime)
-    }
-    
+    public private(set) var currentLocation: Locator?
+
     @discardableResult
     public func go(to locator: Locator, animated: Bool = false, completion: @escaping () -> Void = {}) -> Bool {
         guard let newResourceIndex = publication.readingOrder.firstIndex(withHref: locator.href),
@@ -153,7 +180,7 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
         }
 
         // Seeks to time
-        let time = locator.time(forDuration: duration) ?? 0
+        let time = locator.time(forDuration: resourceDuration) ?? 0
         if time > 0 {
             player.seek(to: CMTime(seconds: time, preferredTimescale: 1000))
         }
