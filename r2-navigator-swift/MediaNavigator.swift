@@ -47,6 +47,9 @@ public protocol MediaNavigator: Navigator {
     /// Current playback position in seconds.
     var currentTime: Double { get }
     
+    /// Total duration in the publication, if known.
+    var totalDuration: Double? { get }
+    
     /// Volume of playback, from 0.0 to 1.0.
     var volume: Double { get set }
     

@@ -30,7 +30,8 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
         
         let durations = publication.readingOrder.map { $0.duration ?? 0 }
         self.durations = durations
-        self.totalDuration = publication.metadata.duration ?? durations.reduce(0, +)
+        let totalDuration = publication.metadata.duration ?? durations.reduce(0, +)
+        self.totalDuration = (totalDuration > 0) ? totalDuration : nil
     }
     
     deinit {
@@ -65,8 +66,8 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
     }
 
     /// Total duration in the publication.
-    private let totalDuration: Double
-    
+    public private(set) var totalDuration: Double?
+
     /// Durations indexed by reading order position.
     private let durations: [Double]
 
@@ -142,8 +143,8 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
             progression = resourceDuration.map { time / max($0, 1) }
         }
         
-        var totalProgression: Double?
-        if totalDuration > 0, let startingTime = resourceStartingTime {
+        var totalProgression: Double? = nil
+        if let totalDuration = totalDuration, totalDuration > 0, let startingTime = resourceStartingTime {
             totalProgression = (startingTime + time) / totalDuration
         }
         
