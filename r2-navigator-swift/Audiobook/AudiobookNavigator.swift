@@ -176,6 +176,7 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
         if player.currentItem == nil || resourceIndex != newResourceIndex {
             player.replaceCurrentItem(with: AVPlayerItem(url: url))
             resourceIndex = newResourceIndex
+            currentLocation = locator
             delegate?.navigator(self, loadedTimeRangesDidChange: [])
         }
 
