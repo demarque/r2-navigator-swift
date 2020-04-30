@@ -167,7 +167,8 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
     @discardableResult
     public func go(to locator: Locator, animated: Bool = false, completion: @escaping () -> Void = {}) -> Bool {
         guard let newResourceIndex = publication.readingOrder.firstIndex(withHref: locator.href),
-            let url = URL(string: locator.href, relativeTo: publication.baseURL) else {
+            let url = publication.url(to: locator.href) else
+        {
             return false
         }
         
@@ -175,6 +176,7 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
 
         // Loads resource
         if player.currentItem == nil || resourceIndex != newResourceIndex {
+            log(.info, "Starts playing \(url.absoluteString)")
             player.replaceCurrentItem(with: AVPlayerItem(url: url))
             resourceIndex = newResourceIndex
             currentLocation = locator
