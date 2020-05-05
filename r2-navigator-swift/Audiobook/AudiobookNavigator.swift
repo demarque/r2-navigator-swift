@@ -115,15 +115,6 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
             self.delegate?.navigator(self, locationDidChange: locator)
         }
         delegate?.navigator(self, playbackDidChange: makePlaybackInfo(forTime: time))
-        // FIXME: probably not working when paused
-        delegate?.navigator(self, loadedTimeRangesDidChange: (player.currentItem?.loadedTimeRanges ?? [])
-            .map { value in
-                let range = value.timeRangeValue
-                let start = range.start.secondsOrZero
-                let duration = range.duration.secondsOrZero
-                return start..<(start + duration)
-            }
-        )
     }
     
     private func makePlaybackInfo(forTime time: Double? = nil) -> MediaPlaybackInfo {
@@ -159,6 +150,30 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
             )
         )
     }
+    
+    
+    // MARK: - Loaded Time Ranges
+
+    private lazy var loadedTimeRangesTimer = Timer.scheduledTimer(timeInterval: 0.5, target: self, selector: #selector(notifyLoadedTimeRanges), userInfo: nil, repeats: true)
+    private var lastLoadedTimeRanges: [Range<Double>] = []
+    
+    @objc func notifyLoadedTimeRanges() {
+        let ranges: [Range<Double>] = (player.currentItem?.loadedTimeRanges ?? [])
+            .map { value in
+                let range = value.timeRangeValue
+                let start = range.start.secondsOrZero
+                let duration = range.duration.secondsOrZero
+                return start..<(start + duration)
+            }
+        
+        guard ranges != lastLoadedTimeRanges else {
+            return
+        }
+
+        lastLoadedTimeRanges = ranges
+        delegate?.navigator(self, loadedTimeRangesDidChange: ranges)
+    }
+    
 
     // MARK: - Navigator
     
@@ -180,6 +195,7 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
             player.replaceCurrentItem(with: AVPlayerItem(url: url))
             resourceIndex = newResourceIndex
             currentLocation = locator
+            loadedTimeRangesTimer.fire()
             delegate?.navigator(self, loadedTimeRangesDidChange: [])
         }
 
