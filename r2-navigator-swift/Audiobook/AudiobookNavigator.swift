@@ -16,7 +16,7 @@ import R2Shared
 public protocol AudiobookNavigatorDelegate: MediaNavigatorDelegate { }
 
 @available(iOS 10.0, *)
-open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
+open class AudiobookNavigator: MediaNavigator, _AudioSessionUser, Loggable {
     
     public weak var delegate: AudiobookNavigatorDelegate?
     
@@ -35,7 +35,7 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
     }
     
     deinit {
-        AudioSession.shared.end(for: self)
+        _AudioSession.shared.end(for: self)
     }
     
     // Current playback info.
@@ -274,7 +274,7 @@ open class AudiobookNavigator: MediaNavigator, AudioSessionUser, Loggable {
     }
 
     public func play() {
-        AudioSession.shared.start(with: self)
+        _AudioSession.shared.start(with: self)
         
         if player.currentItem == nil, let location = initialLocation {
             go(to: location)
