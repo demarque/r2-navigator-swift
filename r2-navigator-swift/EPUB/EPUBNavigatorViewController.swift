@@ -74,7 +74,6 @@ open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Logga
     
     private let config: Configuration
     private let publication: Publication
-    private let license: DRMLicense?
     private let editingActions: EditingActionsController
 
     public var readingProgression: ReadingProgression {
@@ -85,10 +84,9 @@ open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Logga
     /// Used to serve Readium CSS.
     private let resourcesURL: URL?
 
-    public init(publication: Publication, license: DRMLicense? = nil, initialLocation: Locator? = nil, resourcesServer: ResourcesServer, config: Configuration = .init()) {
+    public init(publication: Publication, initialLocation: Locator? = nil, resourcesServer: ResourcesServer, config: Configuration = .init()) {
         self.publication = publication
-        self.license = license
-        self.editingActions = EditingActionsController(actions: config.editingActions, license: license)
+        self.editingActions = EditingActionsController(actions: config.editingActions, rights: publication.rights)
         self.userSettings = UserSettings()
         publication.userProperties.properties = self.userSettings.userProperties.properties
         self.readingProgression = publication.contentLayout.readingProgression
@@ -235,7 +233,7 @@ open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Logga
 
     // Reading order index of the left-most resource in the visible spread.
     private var currentResourceIndex: Int? {
-        return publication.readingOrder.firstIndex(withHref: spreads[currentSpreadIndex].left.href)
+        return publication.readingOrder.firstIndex(withHREF: spreads[currentSpreadIndex].left.href)
     }
 
     private func reloadSpreads(at locator: Locator? = nil) {
@@ -275,7 +273,8 @@ open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Logga
         // The positions are not always available, for example a Readium WebPub doesn't have any
         // unless a Publication Positions Web Service is provided.
         if
-            let positionList = publication.positionsByResource[href],
+            let index = publication.readingOrder.firstIndex(withHREF: href),
+            let positionList = Optional(publication.positionsByReadingOrder[index]),
             positionList.count > 0
         {
             // Gets the current locator from the positionList, and fill its missing data.
@@ -521,6 +520,13 @@ public enum PageTransition {
 extension EPUBNavigatorViewController {
     
     /// This initializer is deprecated.
+    /// `license` is not needed anymore.
+    @available(*, unavailable, renamed: "init(publication:license:initialLocation:resourcesServer:config:)")
+    public convenience init(publication: Publication, license: DRMLicense?, initialLocation: Locator? = nil, resourcesServer: ResourcesServer, config: Configuration = .init()) {
+        self.init(publication: publication, initialLocation: initialLocation, resourcesServer: resourcesServer, config: config)
+    }
+        
+    /// This initializer is deprecated.
     /// Replace `pageTransition` by the `animated` property of the `goTo` functions.
     /// Replace `disableDragAndDrop` by `EditingAction.copy`, since drag and drop is equivalent to copy.
     /// Replace `initialIndex` and `initialProgression` by `initialLocation`.
@@ -531,14 +537,14 @@ extension EPUBNavigatorViewController {
     
     /// This initializer is deprecated.
     /// Use the new Configuration object.
-    @available(*, deprecated, renamed: "init(publication:license:initialLocation:resourcesServer:config:)")
+    @available(*, unavailable, renamed: "init(publication:license:initialLocation:resourcesServer:config:)")
     public convenience init(publication: Publication, license: DRMLicense? = nil, initialLocation: Locator? = nil, editingActions: [EditingAction] = EditingAction.defaultActions, contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets]? = nil, resourcesServer: ResourcesServer) {
         var config = Configuration()
         config.editingActions = editingActions
         if let contentInset = contentInset {
             config.contentInset = contentInset
         }
-        self.init(publication: publication, license: license, initialLocation: initialLocation, resourcesServer: resourcesServer, config: config)
+        self.init(publication: publication, initialLocation: initialLocation, resourcesServer: resourcesServer, config: config)
     }
 
     @available(*, deprecated, message: "Use the `animated` parameter of `goTo` functions instead")
