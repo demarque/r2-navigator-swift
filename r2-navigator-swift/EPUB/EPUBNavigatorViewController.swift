@@ -662,7 +662,7 @@ extension EPUBNavigatorViewController: PaginationViewDelegate {
 @available(*, deprecated, renamed: "EPUBNavigatorViewController")
 public typealias NavigatorViewController = EPUBNavigatorViewController
 
-@available(*, deprecated, message: "Use the `animated` parameter of `goTo` functions instead")
+@available(*, unavailable, message: "Use the `animated` parameter of `goTo` functions instead")
 public enum PageTransition {
     case none
     case animated
@@ -681,7 +681,7 @@ extension EPUBNavigatorViewController {
     /// Replace `pageTransition` by the `animated` property of the `goTo` functions.
     /// Replace `disableDragAndDrop` by `EditingAction.copy`, since drag and drop is equivalent to copy.
     /// Replace `initialIndex` and `initialProgression` by `initialLocation`.
-    @available(*, deprecated, renamed: "init(publication:initialLocation:resourcesServer:config:)")
+    @available(*, unavailable, renamed: "init(publication:initialLocation:resourcesServer:config:)")
     public convenience init(for publication: Publication, license: DRMLicense? = nil, initialIndex: Int, initialProgression: Double?, pageTransition: PageTransition = .none, disableDragAndDrop: Bool = false, editingActions: [EditingAction] = EditingAction.defaultActions, contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets]? = nil) {
         fatalError("This initializer is not available anymore.")
     }
@@ -698,7 +698,7 @@ extension EPUBNavigatorViewController {
         self.init(publication: publication, initialLocation: initialLocation, resourcesServer: resourcesServer, config: config)
     }
 
-    @available(*, deprecated, message: "Use the `animated` parameter of `goTo` functions instead")
+    @available(*, unavailable, message: "Use the `animated` parameter of `goTo` functions instead")
     public var pageTransition: PageTransition {
         get { return .none }
         set {}
