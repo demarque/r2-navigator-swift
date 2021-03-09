@@ -1,12 +1,7 @@
 //
-//  AudiobookNavigator.swift
-//  r2-navigator-swift
-//
-//  Created by Mickaël Menu on 12/03/2020.
-//
-//  Copyright 2020 Readium Foundation. All rights reserved.
-//  Use of this source code is governed by a BSD-style license which is detailed
-//  in the LICENSE file present in the project repository where this source code is maintained.
+//  Copyright 2021 Readium Foundation. All rights reserved.
+//  Use of this source code is governed by the BSD-style license
+//  available in the top-level LICENSE file of the project.
 //
 
 import AVFoundation
@@ -74,6 +69,8 @@ open class AudiobookNavigator: MediaNavigator, _AudioSessionUser, Loggable {
     private var timeControlStatusObserver: NSKeyValueObservation?
     private var currentItemObserver: NSKeyValueObservation?
 
+    private lazy var mediaLoader = PublicationMediaLoader(publication: publication)
+
     private lazy var player: AVPlayer = {
         let player = AVPlayer()
         player.allowsExternalPlayback = false
@@ -95,11 +92,16 @@ open class AudiobookNavigator: MediaNavigator, _AudioSessionUser, Loggable {
         }
 
         NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] notification in
-            if let self = self,
-                (self.delegate?.navigator(self, shouldPlayNextResource: self.makePlaybackInfo()) ?? true),
+            guard
+                let self = self,
                 let currentItem = player.currentItem,
-                currentItem == (notification.object as? AVPlayerItem) {
-                if self.goToNextResource() {
+                currentItem == (notification.object as? AVPlayerItem)
+            else {
+                return
+            }
+
+            self.shouldPlayNextResource { playNext in
+                if playNext && self.goToNextResource() {
                     self.play()
                 }
             }
@@ -107,23 +109,45 @@ open class AudiobookNavigator: MediaNavigator, _AudioSessionUser, Loggable {
         
         return player
     }()
-    
+
+    private func shouldPlayNextResource(completion: @escaping (Bool) -> Void) {
+        guard let delegate = delegate else {
+            completion(true)
+            return
+        }
+
+        makePlaybackInfo { info in
+            completion(delegate.navigator(self, shouldPlayNextResource: info))
+        }
+    }
+
     private func playbackDidChange(_ time: Double? = nil) {
         if let time = time {
             let locator = makeLocator(forTime: time)
             currentLocation = locator
             self.delegate?.navigator(self, locationDidChange: locator)
         }
-        delegate?.navigator(self, playbackDidChange: makePlaybackInfo(forTime: time))
+
+        makePlaybackInfo(forTime: time) { info in
+            self.delegate?.navigator(self, playbackDidChange: info)
+        }
     }
-    
-    private func makePlaybackInfo(forTime time: Double? = nil) -> MediaPlaybackInfo {
-        return MediaPlaybackInfo(
-            resourceIndex: resourceIndex,
-            state: state,
-            time: time ?? currentTime,
-            duration: resourceDuration
-        )
+
+    // A deadlock can occur when loading HTTP assets and creating the playback info from the main thread.
+    // To fix this, this is an asynchronous operation.
+    private func makePlaybackInfo(forTime time: Double? = nil, completion: @escaping (MediaPlaybackInfo) -> Void) {
+        DispatchQueue.global(qos: .userInteractive).async {
+            let info = MediaPlaybackInfo(
+                resourceIndex: self.resourceIndex,
+                state: self.state,
+                time: time ?? self.currentTime,
+                duration: self.resourceDuration
+            )
+
+            DispatchQueue.main.async {
+                completion(info)
+            }
+        }
     }
 
     private func makeLocator(forTime time: Double) -> Locator {
@@ -181,33 +205,39 @@ open class AudiobookNavigator: MediaNavigator, _AudioSessionUser, Loggable {
 
     @discardableResult
     public func go(to locator: Locator, animated: Bool = false, completion: @escaping () -> Void = {}) -> Bool {
-        guard let newResourceIndex = publication.readingOrder.firstIndex(withHref: locator.href),
-            let url = publication.url(to: locator.href) else
-        {
+        guard let newResourceIndex = publication.readingOrder.firstIndex(withHREF: locator.href) else {
             return false
         }
-        
-        pause()
+        let link = publication.readingOrder[newResourceIndex]
 
-        // Loads resource
-        if player.currentItem == nil || resourceIndex != newResourceIndex {
-            log(.info, "Starts playing \(url.absoluteString)")
-            player.replaceCurrentItem(with: AVPlayerItem(url: url))
-            resourceIndex = newResourceIndex
-            currentLocation = locator
-            loadedTimeRangesTimer.fire()
-            delegate?.navigator(self, loadedTimeRangesDidChange: [])
+        do {
+            let asset = try mediaLoader.makeAsset(for: link)
+            pause()
+
+            // Loads resource
+            if player.currentItem == nil || resourceIndex != newResourceIndex {
+                log(.info, "Starts playing \(link.href)")
+                player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+                resourceIndex = newResourceIndex
+                currentLocation = locator
+                loadedTimeRangesTimer.fire()
+                delegate?.navigator(self, loadedTimeRangesDidChange: [])
+            }
+
+            // Seeks to time
+            let time = locator.time(forDuration: resourceDuration) ?? 0
+            if time > 0 {
+                player.seek(to: CMTime(seconds: time, preferredTimescale: 1000))
+            }
+
+            play()
+
+            return true
+
+        } catch {
+            log(.error, error)
+            return false
         }
-
-        // Seeks to time
-        let time = locator.time(forDuration: resourceDuration) ?? 0
-        if time > 0 {
-            player.seek(to: CMTime(seconds: time, preferredTimescale: 1000))
-        }
-        
-        play()
-
-        return true
     }
 
 
