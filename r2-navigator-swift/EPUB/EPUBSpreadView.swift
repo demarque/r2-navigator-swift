@@ -14,7 +14,7 @@ import R2Shared
 import SwiftSoup
 
 
-protocol EPUBSpreadViewDelegate: class {
+protocol EPUBSpreadViewDelegate: AnyObject {
     
     /// Called when the user tapped on the spread contents.
     func spreadView(_ spreadView: EPUBSpreadView, didTapAt point: CGPoint)
@@ -31,9 +31,6 @@ protocol EPUBSpreadViewDelegate: class {
     /// Called when the spread view needs to present a view controller.
     func spreadView(_ spreadView: EPUBSpreadView, present viewController: UIViewController)
 
-    /// Called when the spread view receives an unknown JavaScript message.
-    func spreadView(_ spreadView: EPUBSpreadView, userContentController: WKUserContentController, didReceive message: WKScriptMessage)
-    
 }
 
 class EPUBSpreadView: UIView, Loggable, PageView {
@@ -309,8 +306,7 @@ class EPUBSpreadView: UIView, Loggable, PageView {
     private static let utilsScript = loadScript(named: "utils")
 
     class func loadScript(named name: String) -> String {
-        return Bundle(for: EPUBSpreadView.self)
-            .url(forResource: "Scripts/\(name)", withExtension: "js")
+        return Bundle.module.url(forResource: "\(name)", withExtension: "js", subdirectory: "Assets/Scripts")
             .flatMap { try? String(contentsOf: $0) }!
     }
     
@@ -398,11 +394,10 @@ extension EPUBSpreadView: WKScriptMessageHandler {
 
     /// Handles incoming calls from JS.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        if let handler = JSMessages[message.name]  {
-            handler(message.body)
-        } else {
-            delegate?.spreadView(self, userContentController: userContentController, didReceive: message)
+        guard let handler = JSMessages[message.name] else {
+            return
         }
+        handler(message.body)
     }
 
 }
@@ -452,8 +447,6 @@ extension EPUBSpreadView: UIScrollViewDelegate {
 
 extension EPUBSpreadView: WKUIDelegate {
     
-    // The property allowsLinkPreview is default false in iOS9, so it should be safe to use @available(iOS 10.0, *)
-    @available(iOS 10.0, *)
     func webView(_ webView: WKWebView, shouldPreviewElement elementInfo: WKPreviewElementInfo) -> Bool {
         // Preview allowed only if the link is not internal
         return (elementInfo.linkURL?.host != publication.baseURL?.host)
