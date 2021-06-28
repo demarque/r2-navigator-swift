@@ -39,7 +39,7 @@ class EPUBSpreadView: UIView, Loggable, PageView {
     let publication: Publication
     let spread: EPUBSpread
     
-    let resourcesURL: URL?
+    let resourcesURL: URL
     let webView: WebView
 
     let readingProgression: ReadingProgression
@@ -64,7 +64,7 @@ class EPUBSpreadView: UIView, Loggable, PageView {
 
     private(set) var spreadLoaded = false
 
-    required init(publication: Publication, spread: EPUBSpread, resourcesURL: URL?, readingProgression: ReadingProgression, userSettings: UserSettings, animatedLoad: Bool = false, editingActions: EditingActionsController, contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets]) {
+    required init(publication: Publication, spread: EPUBSpread, resourcesURL: URL, readingProgression: ReadingProgression, userSettings: UserSettings, animatedLoad: Bool = false, editingActions: EditingActionsController, contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets]) {
         self.publication = publication
         self.spread = spread
         self.resourcesURL = resourcesURL
@@ -94,20 +94,30 @@ class EPUBSpreadView: UIView, Loggable, PageView {
 
         NotificationCenter.default.addObserver(self, selector: #selector(voiceOverStatusDidChange), name: Notification.Name(UIAccessibilityVoiceOverStatusChanged), object: nil)
         
-        UIMenuController.shared.menuItems = [
-            UIMenuItem(
-                title: R2NavigatorLocalizedString("EditingAction.share"),
-                action: #selector(shareSelection)
-            )
-        ]
-        
+        UIMenuController.shared.menuItems = menuItems
+
         updateActivityIndicator()
         loadSpread()
     }
-    
+
     deinit {
         NotificationCenter.default.removeObserver(self)
         disableJSMessages()
+    }
+
+    func makeScripts() -> [WKUserScript] { [] }
+
+    var menuItems: [UIMenuItem] {
+        [
+            UIMenuItem(
+                title: R2NavigatorLocalizedString("EditingAction.share"),
+                action: #selector(shareSelection)
+            ),
+            UIMenuItem(
+                title: "Highlight",
+                action: #selector(highlightSelection)
+            ),
+        ]
     }
 
     func setupWebView() {
@@ -158,8 +168,15 @@ class EPUBSpreadView: UIView, Loggable, PageView {
     }
 
     /// Evaluates the given JavaScript into the resource's HTML page.
-    func evaluateScript(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {
-        webView.evaluateJavaScript(script, completionHandler: completion)
+    func evaluateScript(_ script: String, completion: @escaping ((Result<Any, Error>) -> Void)) {
+        log(.debug, "Evaluate script: \(script)")
+        webView.evaluateJavaScript(script) { res, error in
+            if let error = error {
+                completion(.failure(error))
+            } else {
+                completion(.success(res ?? ()))
+            }
+        }
     }
     
     /// Called from the JS code when logging a message.
@@ -300,29 +317,6 @@ class EPUBSpreadView: UIView, Loggable, PageView {
     }
 
     
-    // MARK: - Scripts
-    
-    private static let gesturesScript = loadScript(named: "gestures")
-    private static let utilsScript = loadScript(named: "utils")
-
-    class func loadScript(named name: String) -> String {
-        return Bundle.module.url(forResource: "\(name)", withExtension: "js", subdirectory: "Assets/Scripts")
-            .flatMap { try? String(contentsOf: $0) }!
-    }
-    
-    func loadResource(at path: String) -> String {
-        return (resourcesURL?.appendingPathComponent(path))
-            .flatMap { try? String(contentsOf: $0) }!
-    }
-    
-    func makeScripts() -> [WKUserScript] {
-        return [
-            WKUserScript(source: EPUBSpreadView.gesturesScript, injectionTime: .atDocumentStart, forMainFrameOnly: false),
-            WKUserScript(source: EPUBSpreadView.utilsScript, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        ]
-    }
-    
-    
     // MARK: - JS Messages
     
     private var JSMessages: [String: (Any) -> Void] = [:]
@@ -371,7 +365,52 @@ class EPUBSpreadView: UIView, Loggable, PageView {
             webView.configuration.userContentController.removeScriptMessageHandler(forName: name)
         }
     }
-    
+
+
+    // MARK: – Decorator
+
+    private func locatorForCurrentSelection(completion: @escaping (Locator?) -> Void) {
+        evaluateScript("readium.getCurrentSelectionInfo();") { result in
+            switch result {
+            case .success(let value):
+                guard let json = value as? [String: Any] else {
+                    completion(nil)
+                    return
+                }
+
+                let link = self.spread.leading
+                let locator = Locator(
+                    href: link.href,
+                    type: link.type ?? "",
+                    title: link.title,
+                    locations: try! Locator.Locations(json: json["locations"]),
+                    text: try! Locator.Text(json: json["text"])
+                )
+                completion(locator)
+            case .failure(let error):
+                self.log(.error, error)
+            }
+        }
+    }
+
+    private func createHighlight(at locator: Locator, color: UIColor) {
+        guard let json = locator.jsonString else {
+            return
+        }
+        evaluateScript("readium.createHighlight(\(json), null, true);") { _ in
+        }
+    }
+
+    @objc private func highlightSelection() {
+        locatorForCurrentSelection { locator in
+            guard let locator = locator else {
+                return
+            }
+            print("SELECT \(locator.json)")
+            self.createHighlight(at: locator, color: .yellow)
+        }
+    }
+
     
     // MARK: - Accessibility
     
