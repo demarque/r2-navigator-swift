@@ -113,10 +113,6 @@ class EPUBSpreadView: UIView, Loggable, PageView {
                 title: R2NavigatorLocalizedString("EditingAction.share"),
                 action: #selector(shareSelection)
             ),
-            UIMenuItem(
-                title: "Highlight",
-                action: #selector(highlightSelection)
-            ),
         ]
     }
 
