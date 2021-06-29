@@ -12,10 +12,10 @@
       },
       {
         "package": "r2-shared-swift",
-        "repositoryURL": "https://github.com/readium/r2-shared-swift.git",
+        "repositoryURL": "https://github.com/demarque/r2-shared-swift.git",
         "state": {
           "branch": "develop",
-          "revision": "6c44cbbcecb3a0ce345cce44141089d48ff77045",
+          "revision": "74d93a9b6228b9c3f28270831e6e7c58c4612a19",
           "version": null
         }
       },
