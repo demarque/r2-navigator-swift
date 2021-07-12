@@ -1,21 +1,17 @@
 //
-//  EPUBSpreadView.swift
-//  r2-navigator-swift
-//
-//  Created by Winnie Quinn, Alexandre Camilleri, Mickaël Menu on 8/23/17.
-//
 //  Copyright 2019 Readium Foundation. All rights reserved.
-//  Use of this source code is governed by a BSD-style license which is detailed
-//  in the LICENSE file present in the project repository where this source code is maintained.
+//  Use of this source code is governed by the BSD-style license
+//  available in the top-level LICENSE file of the project.
 //
 
 import WebKit
 import R2Shared
 import SwiftSoup
 
-
 protocol EPUBSpreadViewDelegate: AnyObject {
-    
+    /// Called when the spread view finished loading.
+    func spreadViewDidLoad(_ spreadView: EPUBSpreadView)
+
     /// Called when the user tapped on the spread contents.
     func spreadView(_ spreadView: EPUBSpreadView, didTapAt point: CGPoint)
     
@@ -24,13 +20,15 @@ protocol EPUBSpreadViewDelegate: AnyObject {
     
     /// Called when the user tapped on an internal link.
     func spreadView(_ spreadView: EPUBSpreadView, didTapOnInternalLink href: String, tapData: TapData?)
-    
+
+    /// Called when the user tapped on a decoration.
+    func spreadView(_ spreadView: EPUBSpreadView, didActivateDecoration id: Decoration.Id, inGroup group: String)
+
     /// Called when the pages visible in the spread changed.
     func spreadViewPagesDidChange(_ spreadView: EPUBSpreadView)
     
     /// Called when the spread view needs to present a view controller.
     func spreadView(_ spreadView: EPUBSpreadView, present viewController: UIViewController)
-
 }
 
 class EPUBSpreadView: UIView, Loggable, PageView {
@@ -44,8 +42,9 @@ class EPUBSpreadView: UIView, Loggable, PageView {
 
     let readingProgression: ReadingProgression
     let userSettings: UserSettings
+    let scripts: [WKUserScript]
     let editingActions: EditingActionsController
-    
+
     private var lastTap: TapData? = nil
 
     /// If YES, the content will be faded in once loaded.
@@ -64,12 +63,13 @@ class EPUBSpreadView: UIView, Loggable, PageView {
 
     private(set) var spreadLoaded = false
 
-    required init(publication: Publication, spread: EPUBSpread, resourcesURL: URL, readingProgression: ReadingProgression, userSettings: UserSettings, animatedLoad: Bool = false, editingActions: EditingActionsController, contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets]) {
+    required init(publication: Publication, spread: EPUBSpread, resourcesURL: URL, readingProgression: ReadingProgression, userSettings: UserSettings, scripts: [WKUserScript], animatedLoad: Bool = false, editingActions: EditingActionsController, contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets]) {
         self.publication = publication
         self.spread = spread
         self.resourcesURL = resourcesURL
         self.readingProgression = readingProgression
         self.userSettings = userSettings
+        self.scripts = scripts
         self.editingActions = editingActions
         self.animatedLoad = animatedLoad
         self.webView = WebView(editingActions: editingActions)
@@ -87,14 +87,12 @@ class EPUBSpreadView: UIView, Loggable, PageView {
 
         addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(didTapBackground)))
         
-        for script in makeScripts() {
+        for script in scripts {
             webView.configuration.userContentController.addUserScript(script)
         }
         registerJSMessages()
 
         NotificationCenter.default.addObserver(self, selector: #selector(voiceOverStatusDidChange), name: Notification.Name(UIAccessibilityVoiceOverStatusChanged), object: nil)
-        
-        UIMenuController.shared.menuItems = menuItems
 
         updateActivityIndicator()
         loadSpread()
@@ -103,17 +101,6 @@ class EPUBSpreadView: UIView, Loggable, PageView {
     deinit {
         NotificationCenter.default.removeObserver(self)
         disableJSMessages()
-    }
-
-    func makeScripts() -> [WKUserScript] { [] }
-
-    var menuItems: [UIMenuItem] {
-        [
-            UIMenuItem(
-                title: R2NavigatorLocalizedString("EditingAction.share"),
-                action: #selector(shareSelection)
-            ),
-        ]
     }
 
     func setupWebView() {
@@ -164,13 +151,14 @@ class EPUBSpreadView: UIView, Loggable, PageView {
     }
 
     /// Evaluates the given JavaScript into the resource's HTML page.
-    func evaluateScript(_ script: String, completion: @escaping ((Result<Any, Error>) -> Void)) {
+    func evaluateScript(_ script: String, inHREF href: String? = nil, completion: ((Result<Any, Error>) -> Void)? = nil) {
         log(.debug, "Evaluate script: \(script)")
         webView.evaluateJavaScript(script) { res, error in
             if let error = error {
-                completion(.failure(error))
+                self.log(.error, error)
+                completion?(.failure(error))
             } else {
-                completion(.success(res ?? ()))
+                completion?(.success(res ?? ()))
             }
         }
     }
@@ -234,6 +222,7 @@ class EPUBSpreadView: UIView, Loggable, PageView {
         spreadLoaded = true
         applyUserSettingsStyle()
         spreadDidLoad()
+        delegate?.spreadViewDidLoad(self)
     }
     
     /// To be overriden to customize the behavior after the spread is loaded.
@@ -250,22 +239,30 @@ class EPUBSpreadView: UIView, Loggable, PageView {
 
     /// Called by the JavaScript layer when the user selection changed.
     private func selectionDidChange(_ body: Any) {
-        guard let selection = body as? [String: Any],
-            let text = selection["text"] as? String,
-            let frame = selection["frame"] as? [String: Any] else
-        {
+        if body is NSNull {
+            editingActions.selection = nil
+            return
+        }
+
+        guard
+            let selection = body as? [String: Any],
+            let locator = try? Locator(json: selection["locator"]),
+            let frame = selection["frame"] as? [String: Any]
+        else {
+            editingActions.selection = nil
             log(.warning, "Invalid body for selectionDidChange: \(body)")
             return
         }
-        editingActions.selectionDidChange((
-            text: text,
+
+        editingActions.selection = Selection(
+            locator: locator,
             frame: CGRect(
                 x: frame["x"] as? CGFloat ?? 0,
                 y: frame["y"] as? CGFloat ?? 0,
                 width: frame["width"] as? CGFloat ?? 0,
                 height: frame["height"] as? CGFloat ?? 0
             )
-        ))
+        )
     }
     
     /// Called when the user hit the Share item in the selection context menu.
@@ -338,6 +335,7 @@ class EPUBSpreadView: UIView, Loggable, PageView {
         registerJSMessage(named: "tap") { [weak self] in self?.didTap($0) }
         registerJSMessage(named: "spreadLoaded") { [weak self] in self?.spreadDidLoad($0) }
         registerJSMessage(named: "selectionChanged") { [weak self] in self?.selectionDidChange($0) }
+        registerJSMessage(named: "decorationActivated") { [weak self] in self?.decorationDidActivate($0) }
     }
     
     /// Add the message handlers for incoming javascript events.
@@ -365,46 +363,17 @@ class EPUBSpreadView: UIView, Loggable, PageView {
 
     // MARK: – Decorator
 
-    private func locatorForCurrentSelection(completion: @escaping (Locator?) -> Void) {
-        evaluateScript("readium.getCurrentSelectionInfo();") { result in
-            switch result {
-            case .success(let value):
-                guard let json = value as? [String: Any] else {
-                    completion(nil)
-                    return
-                }
-
-                let link = self.spread.leading
-                let locator = Locator(
-                    href: link.href,
-                    type: link.type ?? "",
-                    title: link.title,
-                    locations: try! Locator.Locations(json: json["locations"]),
-                    text: try! Locator.Text(json: json["text"])
-                )
-                completion(locator)
-            case .failure(let error):
-                self.log(.error, error)
-            }
-        }
-    }
-
-    private func createHighlight(at locator: Locator, color: UIColor) {
-        guard let json = locator.jsonString else {
+    /// Called by the JavaScript layer when the user activates a decoration.
+    private func decorationDidActivate(_ body: Any) {
+        guard
+            let decoration = body as? [String: Any],
+            let decorationId = decoration["id"] as? Decoration.Id,
+            let groupName = decoration["group"] as? String
+        else {
+            log(.warning, "Invalid body for decorationDidActivate: \(body)")
             return
         }
-        evaluateScript("readium.createHighlight(\(json), null, true);") { _ in
-        }
-    }
-
-    @objc private func highlightSelection() {
-        locatorForCurrentSelection { locator in
-            guard let locator = locator else {
-                return
-            }
-            print("SELECT \(locator.json)")
-            self.createHighlight(at: locator, color: .yellow)
-        }
+        delegate?.spreadView(self, didActivateDecoration: decorationId, inGroup: groupName)
     }
 
     
@@ -471,7 +440,7 @@ extension EPUBSpreadView: UIScrollViewDelegate {
     }
     
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        webView.dismissUserSelection()
+        webView.clearSelection()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {

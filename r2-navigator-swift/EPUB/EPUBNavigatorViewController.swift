@@ -1,22 +1,16 @@
 //
-//  EPUBNavigatorViewController.swift
-//  r2-navigator-swift
-//
-//  Created by Winnie Quinn, Alexandre Camilleri on 8/23/17.
-//
 //  Copyright 2018 Readium Foundation. All rights reserved.
-//  Use of this source code is governed by a BSD-style license which is detailed
-//  in the LICENSE file present in the project repository where this source code is maintained.
+//  Use of this source code is governed by the BSD-style license
+//  available in the top-level LICENSE file of the project.
 //
 
-import UIKit
 import R2Shared
-import WebKit
 import SafariServices
 import SwiftSoup
+import UIKit
+import WebKit
 
-
-public protocol EPUBNavigatorDelegate: VisualNavigatorDelegate {
+public protocol EPUBNavigatorDelegate: VisualNavigatorDelegate, SelectableNavigatorDelegate {
 
     // MARK: - WebView Customization
 
@@ -52,37 +46,60 @@ public extension EPUBNavigatorDelegate {
 
 public typealias EPUBContentInsets = (top: CGFloat, bottom: CGFloat)
 
-open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Loggable {
-    
-    public struct Configuration {
-        /// Authorized actions to be displayed in the selection menu.
-        public var editingActions: [EditingAction] = EditingAction.defaultActions
-        
-        /// Content insets used to add some vertical margins around reflowable EPUB publications.
-        /// The insets can be configured for each size class to allow smaller margins on compact
-        /// screens.
-        public var contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets] = [
-            .compact: (top: 20, bottom: 20),
-            .regular: (top: 44, bottom: 44)
-        ]
-        
-        /// Number of positions (as in `Publication.positionList`) to preload before the current page.
-        public var preloadPreviousPositionCount = 2
-        
-        /// Number of positions (as in `Publication.positionList`) to preload after the current page.
-        public var preloadNextPositionCount = 6
-        
-        /// Logs the state changes when true.
-        public var debugState = false
-        
-        public init() {}
-    }
+open class EPUBNavigatorViewController: UIViewController, VisualNavigator, SelectableNavigator, DecorableNavigator, Loggable {
 
     public enum EPUBError: Error {
         /// Returned when calling evaluateJavaScript() before a resource is loaded.
         case spreadNotLoaded
     }
-    
+
+    public struct Configuration {
+        /// Editing actions which will be displayed in the default text selection menu.
+        ///
+        /// The default set of editing actions is `EditingAction.defaultActions`.
+        ///
+        /// You can provide custom actions with `EditingAction(title: "Highlight", action: #selector(highlight:))`.
+        /// Then, implement the selector in one of your classes in the responder chain. Typically, in the
+        /// `UIViewController` wrapping the `EPUBNavigatorViewController`.
+        public var editingActions: [EditingAction]
+
+        /// Content insets used to add some vertical margins around reflowable EPUB publications.
+        /// The insets can be configured for each size class to allow smaller margins on compact
+        /// screens.
+        public var contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets]
+
+        /// Number of positions (as in `Publication.positionList`) to preload before the current page.
+        public var preloadPreviousPositionCount: Int
+        
+        /// Number of positions (as in `Publication.positionList`) to preload after the current page.
+        public var preloadNextPositionCount: Int
+
+        /// Supported decoration styles.
+        public var decorationStyles: [Decoration.Style.Id: HTMLDecorationTemplate]
+
+        /// Logs the state changes when true.
+        public var debugState: Bool
+
+        public init(
+            editingActions: [EditingAction] = EditingAction.defaultActions,
+            contentInset: [UIUserInterfaceSizeClass: EPUBContentInsets] = [
+                .compact: (top: 20, bottom: 20),
+                .regular: (top: 44, bottom: 44)
+            ],
+            preloadPreviousPositionCount: Int = 2,
+            preloadNextPositionCount: Int = 6,
+            decorationStyles: [Decoration.Style.Id: HTMLDecorationTemplate] = HTMLDecorationTemplate.defaultStyles(),
+            debugState: Bool = false
+        ) {
+            self.editingActions = editingActions
+            self.contentInset = contentInset
+            self.preloadPreviousPositionCount = preloadPreviousPositionCount
+            self.preloadNextPositionCount = preloadNextPositionCount
+            self.decorationStyles = decorationStyles
+            self.debugState = debugState
+        }
+    }
+
     public weak var delegate: EPUBNavigatorDelegate? {
         didSet { notifyCurrentLocation() }
     }
@@ -180,7 +197,7 @@ open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Logga
         }
     }
 
-    private let config: Configuration
+    let config: Configuration
     private let publication: Publication
     private let initialLocation: Locator?
     private let editingActions: EditingActionsController
@@ -233,6 +250,8 @@ open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Logga
         view.addSubview(paginationView)
         
         view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(didTapBackground)))
+
+        editingActions.updateSharedMenuController()
 
         reloadSpreads(at: initialLocation)
     }
@@ -529,56 +548,95 @@ open class EPUBNavigatorViewController: UIViewController, VisualNavigator, Logga
         return go(to: direction, animated: animated, completion: completion)
     }
 
+    // MARK: – SelectableNavigator
+
+    public var currentSelection: Selection? { editingActions.selection }
+
+    public func clearSelection() {
+        for (_, pageView) in paginationView.loadedViews {
+            (pageView as? EPUBSpreadView)?.webView.clearSelection()
+        }
+    }
+
+    // MARK: – DecorableNavigator
+
+    private var decorations: [String: [DiffableDecoration]] = [:]
+
+    public func supports(decorationStyle style: Decoration.Style.Id) -> Bool {
+        config.decorationStyles.keys.contains(style)
+    }
+
+    public func apply(decorations: [Decoration], in group: String) {
+        let source = self.decorations[group] ?? []
+        let target = decorations.map { DiffableDecoration(decoration: $0) }
+
+        self.decorations[group] = target
+
+        if decorations.isEmpty {
+            for (_, pageView) in paginationView.loadedViews {
+                (pageView as? EPUBSpreadView)?.evaluateScript(
+                    "readium.getDecorations('\(group)').clear();"
+                )
+            }
+
+        } else {
+            for (href, changes) in target.changesByHREF(from: source) {
+                guard let script = changes.javascript(forGroup: group, styles: config.decorationStyles) else {
+                    continue
+                }
+                loadedSpreadView(forHREF: href)?.evaluateScript(script, inHREF: href)
+            }
+        }
+    }
+
+    private func loadedSpreadView(forHREF href: String) -> EPUBSpreadView? {
+        paginationView.loadedViews
+            .compactMap { _, view in view as? EPUBSpreadView }
+            .first { $0.spread.links.first(withHREF: href) != nil}
+    }
+
     // MARK: – EPUB-specific extensions
 
     /// Evaluates the given JavaScript on the currently visible HTML resource.
     public func evaluateJavaScript(_ script: String, completion: ((Result<Any, Error>) -> Void)? = nil) {
-        guard let webView = (paginationView.currentView as? EPUBSpreadView)?.webView else {
+        guard let spreadView = paginationView.currentView as? EPUBSpreadView else {
             DispatchQueue.main.async {
                 completion?(.failure(EPUBError.spreadNotLoaded))
             }
             return
         }
-
-        evaluateJavaScript(script, in: webView, completion: completion)
-    }
-
-    public func highlight(locator: Locator) {
-        guard let json = locator.jsonString else {
-            return
-        }
-
-        paginationView.loadedViews
-            .compactMap { _, pageView in pageView as? EPUBSpreadView  }
-            .filter { $0.spread.links.first(withHREF: locator.href) != nil }
-            .forEach {
-                evaluateJavaScript("readium.highlight(\(json));", in: $0.webView)
-            }
-    }
-
-    public func clearHighlights() {
-        for (_, pageView) in paginationView.loadedViews {
-            if let webView = (pageView as? EPUBSpreadView)?.webView {
-                evaluateJavaScript("readium.clearHighlights();", in: webView)
-            }
-        }
-    }
-
-    private func evaluateJavaScript(_ script: String, in webView: WKWebView, completion: ((Result<Any, Error>) -> Void)? = nil) {
-        webView.evaluateJavaScript(script) { result, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    completion?(.failure(error))
-                } else {
-                    completion?(.success(result ?? ()))
-                }
-            }
-        }
+        spreadView.evaluateScript(script, completion: completion)
     }
 }
 
 extension EPUBNavigatorViewController: EPUBSpreadViewDelegate {
-    
+
+    func spreadViewDidLoad(_ spreadView: EPUBSpreadView) {
+        let decorationStyles = config.decorationStyles.reduce(into: [:]) { styles, item in
+            styles[item.key.rawValue] = item.value.json
+        }
+
+        guard let stylesJSON = serializeJSONString(decorationStyles) else {
+            log(.error, "Can't serialize decoration styles to JSON")
+            return
+        }
+        spreadView.evaluateScript("readium.registerDecorationStyles(\(stylesJSON.replacingOccurrences(of: "\\n", with: " ")));")
+
+        for link in spreadView.spread.links {
+            let href = link.href
+            for (group, decorations) in decorations {
+                let decorations = decorations
+                    .filter { $0.decoration.locator.href == href }
+                    .map { DecorationChange.add($0.decoration) }
+
+                guard let script = decorations.javascript(forGroup: group, styles: config.decorationStyles) else {
+                    continue
+                }
+                spreadView.evaluateScript(script, inHREF: href)
+            }
+        }
+    }
+
     func spreadView(_ spreadView: EPUBSpreadView, didTapAt point: CGPoint) {
         // We allow taps in any state, because we should always be able to toggle the navigation bar,
         // even while a locator is pending.
@@ -681,7 +739,18 @@ extension EPUBNavigatorViewController: EPUBSpreadViewDelegate {
             return nil
         }
     }
-    
+
+    func spreadView(_ spreadView: EPUBSpreadView, didActivateDecoration id: Decoration.Id, inGroup group: String) {
+        guard let decoration: Decoration = decorations[group]?
+            .first(where: { $0.decoration.id == id })
+            .map({ $0.decoration })
+        else {
+            return
+        }
+
+        log(.info, "Activated decoration: \(decoration)")
+    }
+
     func spreadViewPagesDidChange(_ spreadView: EPUBSpreadView) {
         if paginationView.currentView == spreadView {
             notifyCurrentLocation()
@@ -701,7 +770,14 @@ extension EPUBNavigatorViewController: EditingActionsControllerDelegate {
         // FIXME: Deprecated, to be removed at some point.
         delegate?.presentError(.copyForbidden)
     }
-    
+
+    func editingActions(_ editingActions: EditingActionsController, shouldShowMenuForSelection selection: Selection) -> Bool {
+        true
+    }
+
+    func editingActions(_ editingActions: EditingActionsController, canPerformAction action: EditingAction, for selection: Selection) -> Bool {
+        true
+    }
 }
 
 extension EPUBNavigatorViewController: PaginationViewDelegate {
@@ -715,6 +791,7 @@ extension EPUBNavigatorViewController: PaginationViewDelegate {
             resourcesURL: resourcesURL,
             readingProgression: readingProgression,
             userSettings: userSettings,
+            scripts: [],
             animatedLoad: false,  // FIXME: custom animated
             editingActions: editingActions,
             contentInset: config.contentInset

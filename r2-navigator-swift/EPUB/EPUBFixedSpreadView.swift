@@ -73,7 +73,7 @@ final class EPUBFixedSpreadView: EPUBSpreadView {
         guard isWrapperLoaded else {
             return
         }
-        webView.evaluateJavaScript("spread.load(\(spread.jsonString(for: publication)));")
+        super.evaluateScript("spread.load(\(spread.jsonString(for: publication)));")
     }
 
     override func spreadDidLoad() {
@@ -81,8 +81,9 @@ final class EPUBFixedSpreadView: EPUBSpreadView {
         goToCompletions.complete()
     }
 
-    override func evaluateScript(_ script: String, completion: @escaping ((Result<Any, Error>) -> Void)) {
-        let script = "spread.eval('', '\(script.replacingOccurrences(of: "'", with: "\\'"))')"
+    override func evaluateScript(_ script: String, inHREF href: String?, completion: ((Result<Any, Error>) -> ())?) {
+        let href = href ?? ""
+        let script = "spread.eval('\(href)', `\(script.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "`", with: "\\`"))`);"
         super.evaluateScript(script, completion: completion)
     }
 

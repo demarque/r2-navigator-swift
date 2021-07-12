@@ -7,6 +7,7 @@
 // Catch JS errors to log them in the app.
 
 import { TextQuoteAnchor } from "./vendor/hypothesis/anchoring/types";
+import { getCurrentSelection } from "./selection";
 
 window.addEventListener(
   "error",
@@ -77,20 +78,7 @@ window.addEventListener("scroll", function () {
 document.addEventListener(
   "selectionchange",
   debounce(50, function () {
-    var info = {};
-    var selection = document.getSelection();
-    if (selection && selection.rangeCount > 0) {
-      var rect = selection.getRangeAt(0).getBoundingClientRect();
-      info["text"] = selection.toString().trim();
-      info["frame"] = {
-        x: rect.left,
-        y: rect.top,
-        width: rect.width,
-        height: rect.height,
-      };
-    }
-
-    webkit.messageHandlers.selectionChanged.postMessage(info);
+    webkit.messageHandlers.selectionChanged.postMessage(getCurrentSelection());
   })
 );
 
@@ -154,18 +142,12 @@ export function scrollToPosition(position, dir) {
 // The expected text argument is a Locator Text object, as defined here:
 // https://readium.org/architecture/models/locators/
 export function scrollToText(text) {
-  try {
-    let anchor = new TextQuoteAnchor(document.body, text.highlight, {
-      prefix: text.before,
-      suffix: text.after,
-    });
-
-    scrollToRange(anchor.toRange());
-    return true;
-  } catch (e) {
-    logException(e);
+  let range = rangeFromLocator({ text });
+  if (!range) {
     return false;
   }
+  scrollToRange(range);
+  return true;
 }
 
 function scrollToRange(range) {
@@ -227,6 +209,23 @@ function snapCurrentPosition() {
   document.scrollingElement.scrollLeft = currentOffsetSnapped;
 }
 
+export function rangeFromLocator(locator) {
+  let text = locator.text;
+  if (!text || !text.highlight) {
+    return null;
+  }
+  try {
+    let anchor = new TextQuoteAnchor(document.body, text.highlight, {
+      prefix: text.before,
+      suffix: text.after,
+    });
+    return anchor.toRange();
+  } catch (e) {
+    logError(e);
+    return null;
+  }
+}
+
 /// User Settings.
 
 // For setting user setting.
@@ -264,7 +263,11 @@ export function log() {
   webkit.messageHandlers.log.postMessage(message);
 }
 
-export function logException(e) {
+export function logErrorMessage(msg) {
+  logError(new Error(msg));
+}
+
+export function logError(e) {
   webkit.messageHandlers.logError.postMessage({
     message: e.message,
   });
